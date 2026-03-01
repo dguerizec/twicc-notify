@@ -36,6 +36,7 @@ class WebSocketService extends ChangeNotifier {
   StreamSubscription? _subscription;
   Timer? _reconnectTimer;
   Timer? _pollTimer;
+  Timer? _pingTimer;
 
   WsConnectionState _state = WsConnectionState.disconnected;
   String? _errorMessage;
@@ -47,6 +48,9 @@ class WebSocketService extends ChangeNotifier {
 
   /// Maximum reconnect delay in seconds.
   static const int _maxReconnectDelay = 30;
+
+  /// Ping interval to keep the connection alive through proxies (Cloudflare, nginx).
+  static const int _pingIntervalSeconds = 30;
 
   WebSocketService(this._prefs, this._auth, this._notifications);
 
@@ -85,13 +89,17 @@ class WebSocketService extends ChangeNotifier {
   Future<void> _connect() async {
     if (_state == WsConnectionState.connecting || _state == WsConnectionState.connected) return;
 
-    final wsUrl = _prefs.wsUrl;
-    if (wsUrl == null) {
+    final baseWsUrl = _prefs.wsUrl;
+    if (baseWsUrl == null) {
       _setState(WsConnectionState.error);
       _errorMessage = 'No TwiCC URL configured';
       notifyListeners();
       return;
     }
+
+    // Request only the message types we need. If the server doesn't
+    // support this parameter it simply ignores it (backward compatible).
+    final wsUrl = '${baseWsUrl}?subscribe=process_state,active_processes';
 
     _setState(WsConnectionState.connecting);
     _errorMessage = null;
@@ -121,6 +129,7 @@ class WebSocketService extends ChangeNotifier {
 
       _setState(WsConnectionState.connected);
       _reconnectAttempts = 0;
+      _startPingTimer();
       debugPrint('[TwiCC] WebSocket connected to $wsUrl');
       updateForegroundNotification('TwiCC Notify', 'Connected — monitoring Claude sessions');
     } catch (e) {
@@ -135,6 +144,7 @@ class WebSocketService extends ChangeNotifier {
 
   /// Disconnect from the WebSocket.
   void _disconnect() {
+    _stopPingTimer();
     _subscription?.cancel();
     _subscription = null;
     _channel?.sink.close();
@@ -157,6 +167,8 @@ class WebSocketService extends ChangeNotifier {
         case 'process_state':
           _handleProcessState(json);
           break;
+        case 'pong':
+          break; // Expected response to our ping heartbeat
         case 'auth_failure':
           _handleAuthFailure();
           break;
@@ -269,12 +281,43 @@ class WebSocketService extends ChangeNotifier {
     });
   }
 
+  /// Start the periodic ping heartbeat to keep the connection alive.
+  ///
+  /// Sends `{"type":"ping"}` every 30s, matching the TwiCC frontend behavior.
+  /// Prevents Cloudflare, nginx, and other reverse proxies from closing
+  /// idle WebSocket connections.
+  void _startPingTimer() {
+    _stopPingTimer();
+    _pingTimer = Timer.periodic(
+      const Duration(seconds: _pingIntervalSeconds),
+      (_) => _sendPing(),
+    );
+  }
+
+  /// Stop the ping heartbeat timer.
+  void _stopPingTimer() {
+    _pingTimer?.cancel();
+    _pingTimer = null;
+  }
+
+  /// Send a ping message to the server.
+  void _sendPing() {
+    if (_channel != null && _state == WsConnectionState.connected) {
+      try {
+        _channel!.sink.add(jsonEncode({'type': 'ping'}));
+      } catch (e) {
+        debugPrint('[TwiCC] Failed to send ping: $e');
+      }
+    }
+  }
+
   /// Cancel all pending timers.
   void _cancelTimers() {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _pollTimer?.cancel();
     _pollTimer = null;
+    _stopPingTimer();
   }
 
   /// Update the connection state and notify listeners.
