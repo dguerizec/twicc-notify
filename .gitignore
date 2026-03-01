@@ -1,0 +1,23 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+.vscode/
+
+# Generated platform directories (recreated by `flutter create`)
+# Uncomment these if you don't want to track platform files:
+# android/
+# macos/
+# ios/
+# linux/
+# windows/
+# web/
+
+# Misc
+*.lock
+.DS_Store
+pubspec.lock

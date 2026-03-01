@@ -1,0 +1,30 @@
+name: twicc_notify
+description: Background notification service for TwiCC (The Web Interface for Claude Code)
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+  flutter: '>=3.16.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  web_socket_channel: ^3.0.1
+  webview_flutter: ^4.10.0
+  flutter_local_notifications: ^18.0.1
+  shared_preferences: ^2.3.4
+  url_launcher: ^6.3.1
+  flutter_background_service: ^5.0.12
+  audioplayers: ^6.1.0
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/sounds/
