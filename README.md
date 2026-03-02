@@ -6,8 +6,14 @@ Cross-platform (Android, macOS) background notification service for [TwiCC](http
 
 - Real-time notifications when Claude enters `user_turn` state
 - Tap notification to open the TwiCC session in your browser
-- Cloudflare Access authentication (Google OAuth) via WebView
+- **Multi-mode authentication**: auto-detects the server setup
+  - No auth (local/LAN)
+  - TwiCC password (built-in password protection)
+  - Cloudflare Access (Google OAuth via WebView)
 - Configurable poll interval to optimize battery usage
+- Audio alerts via media stream (works with BT headphones, even in DND)
+- Headphone detection (audio only plays when headphones are connected)
+- WebSocket statistics (messages, bytes, per time window)
 - Auto-connect on launch
 
 ## Prerequisites
@@ -38,6 +44,9 @@ Generate platform directories (`android/`, `macos/`) for your Flutter SDK versio
 # Build + install on connected Android device (preserves app data)
 ./scripts/deploy.sh
 
+# Deploy over WiFi (after pairing):
+./scripts/deploy.sh --wifi
+
 # Or step by step:
 ./scripts/build.sh      # Build release APK
 ./scripts/install.sh    # Install on device (preserves settings)
@@ -46,13 +55,28 @@ Generate platform directories (`android/`, `macos/`) for your Flutter SDK versio
 ./scripts/clean-install.sh
 ```
 
+### WiFi deployment (ADB over network)
+
+Pair your device once, then deploy wirelessly:
+
+```bash
+# One-time pairing (get pairing info from Android Developer Options > Wireless debugging)
+./scripts/wifi-pair.sh <pairing_ip:port> <pairing_code> <debug_port>
+
+# Then deploy over WiFi
+./scripts/deploy.sh --wifi
+```
+
 ## Configuration
 
 1. Launch the app
-2. Enter your TwiCC URL (e.g., `https://twicc.example.com`)
+2. Enter your TwiCC URL (e.g., `https://twicc.example.com` or `http://192.168.1.x:3500`)
 3. Tap **Connect**
-4. If behind Cloudflare Access: complete Google OAuth in the WebView
-5. Adjust notification and battery settings as needed
+4. The app auto-detects the authentication mode:
+   - **No auth**: connects directly
+   - **TwiCC password**: prompts for the password
+   - **Cloudflare Access**: opens a WebView for Google OAuth
+5. Adjust notification, audio alerts, and battery settings as needed
 
 ## Battery Optimization
 

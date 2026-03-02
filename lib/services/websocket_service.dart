@@ -204,10 +204,13 @@ class WebSocketService extends ChangeNotifier {
   }
 
   /// Handle authentication failure from TwiCC.
+  ///
+  /// Clears all stored credentials (CF JWT and session cookie) since
+  /// the server rejected our authentication.
   void _handleAuthFailure() {
     _disconnect();
     _setState(WsConnectionState.authRequired);
-    _auth.clearToken();
+    _auth.clearAll();
   }
 
   /// Called when the WebSocket stream encounters an error.

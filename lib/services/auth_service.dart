@@ -1,34 +1,242 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../utils/preferences.dart';
 
-/// Handles Cloudflare Access authentication via WebView.
+/// Authentication mode detected from the TwiCC server.
+enum AuthMode {
+  /// No authentication required (no password, no Cloudflare).
+  none,
+
+  /// TwiCC password authentication (POST /api/auth/login/).
+  password,
+
+  /// Cloudflare Access authentication (OAuth via WebView).
+  cloudflare,
+}
+
+/// Result of an authentication attempt.
+class AuthResult {
+  final bool success;
+  final String? error;
+
+  const AuthResult.ok() : success = true, error = null;
+  const AuthResult.failed(this.error) : success = false;
+}
+
+/// Handles authentication for TwiCC connections.
 ///
-/// Opens a WebView to the TwiCC URL, lets the user complete Google OAuth
-/// through Cloudflare Access, then extracts the `CF_Authorization` JWT cookie.
+/// Supports three modes:
+/// - **None**: No auth needed, direct WebSocket connection.
+/// - **Password**: TwiCC built-in password. POST to /api/auth/login/
+///   to obtain a Django session cookie.
+/// - **Cloudflare**: Cloudflare Access OAuth via WebView to obtain
+///   a CF_Authorization JWT cookie.
+///
+/// Detection is automatic via GET /api/auth/check/.
 class AuthService {
   final AppPreferences _prefs;
 
   AuthService(this._prefs);
 
-  /// Whether a valid JWT is available.
+  // --- Token state ---
+
+  /// Whether a Cloudflare Access JWT is available.
   bool get hasToken => _prefs.cfJwt != null && _prefs.cfJwt!.isNotEmpty;
 
-  /// Get the current JWT token, or null if not authenticated.
-  String? get token => _prefs.cfJwt;
+  /// Whether a Django session cookie is available.
+  bool get hasSession =>
+      _prefs.sessionCookie != null && _prefs.sessionCookie!.isNotEmpty;
 
-  /// Clear the stored JWT token.
+  /// Whether any form of authentication credential is stored.
+  bool get hasCredentials => hasToken || hasSession;
+
+  /// Clear the Cloudflare JWT token.
   void clearToken() {
     _prefs.cfJwt = null;
   }
 
+  /// Clear the Django session cookie.
+  void clearSession() {
+    _prefs.sessionCookie = null;
+  }
+
+  /// Clear all stored credentials.
+  void clearAll() {
+    clearToken();
+    clearSession();
+  }
+
+  // --- Auth mode detection ---
+
+  /// Detect the authentication mode by probing the server.
+  ///
+  /// Calls GET /api/auth/check/ to determine what authentication
+  /// the server requires:
+  /// - JSON response with `password_required: false` → [AuthMode.none]
+  /// - JSON response with `password_required: true` → [AuthMode.password]
+  /// - Redirect or non-JSON response → [AuthMode.cloudflare]
+  ///
+  /// If a CF JWT is stored, it's included in the probe request so
+  /// the check can pass through Cloudflare Access.
+  Future<AuthMode> detectAuthMode() async {
+    final url = _prefs.url;
+    if (url.isEmpty) return AuthMode.none;
+
+    try {
+      final client = HttpClient();
+      // Accept self-signed certificates (common for local/tunnel setups)
+      client.badCertificateCallback = (cert, host, port) => true;
+      client.connectionTimeout = const Duration(seconds: 10);
+
+      final base = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+      final request = await client.getUrl(Uri.parse('$base/api/auth/check/'));
+      request.followRedirects = false;
+
+      // Include CF JWT if available (needed to pass through Cloudflare)
+      final jwt = _prefs.cfJwt;
+      if (jwt != null && jwt.isNotEmpty) {
+        request.headers.set('Cookie', 'CF_Authorization=$jwt');
+      }
+
+      // Include session cookie if available
+      final session = _prefs.sessionCookie;
+      if (session != null && session.isNotEmpty) {
+        final existing = request.headers.value('Cookie') ?? '';
+        final separator = existing.isNotEmpty ? '; ' : '';
+        request.headers.set('Cookie', '$existing${separator}sessionid=$session');
+      }
+
+      final response = await request.close();
+      final body = await response.transform(utf8.decoder).join();
+      client.close();
+
+      // Redirect → Cloudflare Access is intercepting
+      if (response.statusCode >= 300 && response.statusCode < 400) {
+        debugPrint('[TwiCC Auth] Redirect detected → Cloudflare mode');
+        return AuthMode.cloudflare;
+      }
+
+      // Try to parse JSON response from Django
+      try {
+        final json = jsonDecode(body) as Map<String, dynamic>;
+        final passwordRequired = json['password_required'] as bool? ?? false;
+
+        if (!passwordRequired) {
+          debugPrint('[TwiCC Auth] No password required → no auth mode');
+          return AuthMode.none;
+        }
+
+        final authenticated = json['authenticated'] as bool? ?? false;
+        if (authenticated) {
+          debugPrint('[TwiCC Auth] Already authenticated via session');
+          return AuthMode.none;
+        }
+
+        debugPrint('[TwiCC Auth] Password required → password mode');
+        return AuthMode.password;
+      } catch (_) {
+        // Non-JSON response (e.g. Cloudflare login HTML page)
+        debugPrint('[TwiCC Auth] Non-JSON response → Cloudflare mode');
+        return AuthMode.cloudflare;
+      }
+    } catch (e) {
+      // Network error — can't detect, let WebSocket try without auth
+      debugPrint('[TwiCC Auth] Detection failed: $e');
+      return AuthMode.none;
+    }
+  }
+
+  // --- Password login ---
+
+  /// Login with TwiCC password.
+  ///
+  /// POST to /api/auth/login/ with the password. On success, extracts
+  /// and stores the Django session cookie for use in WebSocket connections.
+  ///
+  /// Returns [AuthResult.ok] on success, [AuthResult.failed] with an
+  /// error message on failure.
+  Future<AuthResult> loginWithPassword(String password) async {
+    final url = _prefs.url;
+    if (url.isEmpty) return const AuthResult.failed('No URL configured');
+
+    try {
+      final client = HttpClient();
+      client.badCertificateCallback = (cert, host, port) => true;
+      client.connectionTimeout = const Duration(seconds: 10);
+
+      final base = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+      final request =
+          await client.postUrl(Uri.parse('$base/api/auth/login/'));
+      request.headers.contentType = ContentType.json;
+
+      // Include CF JWT if needed (for CF + password scenario)
+      final jwt = _prefs.cfJwt;
+      if (jwt != null && jwt.isNotEmpty) {
+        request.headers.set('Cookie', 'CF_Authorization=$jwt');
+      }
+
+      request.write(jsonEncode({'password': password}));
+      final response = await request.close();
+      final body = await response.transform(utf8.decoder).join();
+      client.close();
+
+      if (response.statusCode == 200) {
+        // Extract sessionid cookie from Set-Cookie headers
+        final cookies = response.headers['set-cookie'];
+        if (cookies != null) {
+          for (final cookie in cookies) {
+            final sessionId = _extractSessionId(cookie);
+            if (sessionId != null) {
+              _prefs.sessionCookie = sessionId;
+              debugPrint('[TwiCC Auth] Password login successful, session stored');
+              return const AuthResult.ok();
+            }
+          }
+        }
+        // Login succeeded but no session cookie in response
+        // (shouldn't happen with Django, but handle gracefully)
+        debugPrint('[TwiCC Auth] Login OK but no session cookie found');
+        return const AuthResult.ok();
+      }
+
+      // Parse error message from response
+      try {
+        final json = jsonDecode(body) as Map<String, dynamic>;
+        final error = json['error'] as String? ?? 'Login failed';
+        return AuthResult.failed(error);
+      } catch (_) {
+        return AuthResult.failed('Login failed (HTTP ${response.statusCode})');
+      }
+    } catch (e) {
+      debugPrint('[TwiCC Auth] Login error: $e');
+      return AuthResult.failed('Connection error: $e');
+    }
+  }
+
+  /// Extract the sessionid value from a Set-Cookie header string.
+  String? _extractSessionId(String setCookieHeader) {
+    for (final part in setCookieHeader.split(';')) {
+      final trimmed = part.trim();
+      if (trimmed.startsWith('sessionid=')) {
+        final value = trimmed.substring('sessionid='.length);
+        if (value.isNotEmpty) return value;
+      }
+    }
+    return null;
+  }
+
+  // --- Cloudflare Access authentication ---
+
   /// Open a WebView for Cloudflare Access authentication.
   ///
   /// Returns the JWT token on success, or null if the user cancelled.
-  /// This must be called from a widget context that can show a dialog/page.
+  /// This must be called from a widget context that can show a dialog.
   Future<String?> authenticate(BuildContext context) async {
     final url = _prefs.url;
     if (url.isEmpty) return null;
@@ -59,16 +267,94 @@ class AuthService {
     return completer.future;
   }
 
-  /// Build cookie header for WebSocket connection.
+  // --- WebSocket headers ---
+
+  /// Build Cookie header for WebSocket connections.
   ///
-  /// Returns a map with the Cookie header if a JWT is available,
-  /// or an empty map if no authentication is needed.
+  /// Combines CF JWT and/or Django session cookie as needed.
+  /// Returns an empty map if no credentials are stored.
   Map<String, String> get wsHeaders {
+    final parts = <String>[];
+
     final jwt = _prefs.cfJwt;
-    if (jwt == null || jwt.isEmpty) return {};
-    return {'Cookie': 'CF_Authorization=$jwt'};
+    if (jwt != null && jwt.isNotEmpty) {
+      parts.add('CF_Authorization=$jwt');
+    }
+
+    final session = _prefs.sessionCookie;
+    if (session != null && session.isNotEmpty) {
+      parts.add('sessionid=$session');
+    }
+
+    if (parts.isEmpty) return {};
+    return {'Cookie': parts.join('; ')};
   }
 }
+
+// ---------------------------------------------------------------------------
+// Password login dialog
+// ---------------------------------------------------------------------------
+
+/// Show a dialog prompting the user for the TwiCC password.
+///
+/// Returns the entered password on submit, or null if cancelled.
+Future<String?> showPasswordDialog(BuildContext context) async {
+  final controller = TextEditingController();
+  final formKey = GlobalKey<FormState>();
+
+  return showDialog<String>(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogContext) {
+      return AlertDialog(
+        title: const Text('TwiCC Password'),
+        content: Form(
+          key: formKey,
+          child: TextFormField(
+            controller: controller,
+            obscureText: true,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Password',
+              hintText: 'Enter TwiCC password',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.lock),
+            ),
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) {
+                return 'Password is required';
+              }
+              return null;
+            },
+            onFieldSubmitted: (_) {
+              if (formKey.currentState!.validate()) {
+                Navigator.of(dialogContext).pop(controller.text.trim());
+              }
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(null),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (formKey.currentState!.validate()) {
+                Navigator.of(dialogContext).pop(controller.text.trim());
+              }
+            },
+            child: const Text('Sign in'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cloudflare Access WebView dialog (existing)
+// ---------------------------------------------------------------------------
 
 /// Dialog containing a WebView for Cloudflare Access login.
 class _AuthWebViewDialog extends StatefulWidget {

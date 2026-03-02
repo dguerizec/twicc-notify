@@ -26,6 +26,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _urlController;
+  bool _authenticating = false;
 
   AppPreferences get _prefs => widget.prefs;
   WebSocketService get _ws => widget.wsService;
@@ -57,6 +58,75 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  /// Connect with automatic authentication mode detection.
+  ///
+  /// Flow:
+  /// 1. Detect auth mode via GET /api/auth/check/
+  /// 2. None → connect directly
+  /// 3. Password → show password dialog, POST login, connect
+  /// 4. Cloudflare → WebView OAuth, then re-detect (may also need password)
+  Future<void> _connectWithAuth() async {
+    if (!_prefs.isConfigured) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a TwiCC URL first')),
+      );
+      return;
+    }
+
+    setState(() => _authenticating = true);
+
+    try {
+      var mode = await _auth.detectAuthMode();
+
+      // Cloudflare Access flow
+      if (mode == AuthMode.cloudflare) {
+        if (!mounted) return;
+        final token = await _auth.authenticate(context);
+        if (token == null) return; // User cancelled
+
+        // Re-detect: now that we have a CF JWT, check if password is also needed
+        mode = await _auth.detectAuthMode();
+      }
+
+      // Password flow
+      if (mode == AuthMode.password) {
+        if (!_auth.hasSession) {
+          final ok = await _doPasswordLogin();
+          if (!ok) return; // User cancelled or login failed
+        }
+      }
+
+      // All auth resolved, connect
+      _ws.start();
+    } finally {
+      if (mounted) setState(() => _authenticating = false);
+    }
+  }
+
+  /// Show password dialog and attempt login.
+  ///
+  /// Returns true if login succeeded, false if cancelled or failed.
+  Future<bool> _doPasswordLogin() async {
+    if (!mounted) return false;
+
+    final password = await showPasswordDialog(context);
+    if (password == null) return false; // Cancelled
+
+    final result = await _auth.loginWithPassword(password);
+    if (result.success) return true;
+
+    // Show error and let user retry
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.error ?? 'Login failed'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+    return false;
+  }
+
   Future<void> _toggleConnection() async {
     if (_ws.isActive) {
       _ws.stop();
@@ -65,31 +135,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     // Save URL first
     _saveUrl();
-
-    if (!_prefs.isConfigured) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a TwiCC URL first')),
-      );
-      return;
-    }
-
-    // Check if we need Cloudflare Access authentication
-    if (!_auth.hasToken) {
-      final token = await _auth.authenticate(context);
-      if (token == null) {
-        // User cancelled authentication
-        return;
-      }
-    }
-
-    _ws.start();
+    await _connectWithAuth();
   }
 
+  /// Re-authenticate after an auth failure.
+  ///
+  /// Detects the current auth mode and shows the appropriate login UI.
   Future<void> _reauthenticate() async {
-    final token = await _auth.authenticate(context);
-    if (token != null) {
-      _ws.start();
-    }
+    await _connectWithAuth();
   }
 
   @override
@@ -261,6 +314,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: TextStyle(color: statusColor, fontWeight: FontWeight.w500),
                   ),
                 ),
+                if (_authenticating)
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
               ],
             ),
             const SizedBox(height: 12),
@@ -268,7 +327,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: _toggleConnection,
+                    onPressed: _authenticating ? null : _toggleConnection,
                     icon: Icon(_ws.isActive ? Icons.stop : Icons.play_arrow),
                     label: Text(_ws.isActive ? 'Disconnect' : 'Connect'),
                     style: FilledButton.styleFrom(
@@ -279,7 +338,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 if (state == WsConnectionState.authRequired) ...[
                   const SizedBox(width: 8),
                   OutlinedButton.icon(
-                    onPressed: _reauthenticate,
+                    onPressed: _authenticating ? null : _reauthenticate,
                     icon: const Icon(Icons.login),
                     label: const Text('Sign in'),
                   ),

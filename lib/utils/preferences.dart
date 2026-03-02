@@ -14,6 +14,7 @@ class AppPreferences {
   static const _keyAudioAlertEnabled = 'audio_alert_enabled';
   static const _keyAudioAlertOnQuestion = 'audio_alert_on_question';
   static const _keyAudioAlertOnWaiting = 'audio_alert_on_waiting';
+  static const _keySessionCookie = 'session_cookie';
   static const _keyStatsBuckets = 'ws_stats_buckets';
 
   late final SharedPreferences _prefs;
@@ -36,6 +37,17 @@ class AppPreferences {
       _prefs.remove(_keyCfJwt);
     } else {
       _prefs.setString(_keyCfJwt, value);
+    }
+  }
+
+  // --- Django session cookie (password auth) ---
+
+  String? get sessionCookie => _prefs.getString(_keySessionCookie);
+  set sessionCookie(String? value) {
+    if (value == null) {
+      _prefs.remove(_keySessionCookie);
+    } else {
+      _prefs.setString(_keySessionCookie, value);
     }
   }
 
@@ -90,11 +102,14 @@ class AppPreferences {
 
   /// Build the WebSocket URL from the configured TwiCC URL.
   ///
-  /// Converts `https://` to `wss://` and appends `/ws/`.
+  /// Converts `https://` to `wss://` and `http://` to `ws://`,
+  /// then appends `/ws/`.
   String? get wsUrl {
     if (!isConfigured) return null;
     final base = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
-    final wsBase = base.replaceFirst(RegExp(r'^https?://'), 'wss://');
+    final wsBase = base
+        .replaceFirst('https://', 'wss://')
+        .replaceFirst('http://', 'ws://');
     return '$wsBase/ws/';
   }
 }
