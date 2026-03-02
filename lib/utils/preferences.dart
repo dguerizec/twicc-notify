@@ -14,6 +14,7 @@ class AppPreferences {
   static const _keyAudioAlertEnabled = 'audio_alert_enabled';
   static const _keyAudioAlertOnQuestion = 'audio_alert_on_question';
   static const _keyAudioAlertOnWaiting = 'audio_alert_on_waiting';
+  static const _keyStatsBuckets = 'ws_stats_buckets';
 
   late final SharedPreferences _prefs;
 
@@ -77,6 +78,12 @@ class AppPreferences {
 
   bool get audioAlertOnWaiting => _prefs.getBool(_keyAudioAlertOnWaiting) ?? true;
   set audioAlertOnWaiting(bool value) => _prefs.setBool(_keyAudioAlertOnWaiting, value);
+
+  // --- WebSocket stats persistence ---
+
+  String? get statsJson => _prefs.getString(_keyStatsBuckets);
+  Future<void> setStatsJson(String json) => _prefs.setString(_keyStatsBuckets, json);
+  Future<void> clearStatsJson() => _prefs.remove(_keyStatsBuckets);
 
   /// Whether a URL has been configured.
   bool get isConfigured => url.isNotEmpty;

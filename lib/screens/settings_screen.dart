@@ -4,9 +4,9 @@ import '../services/auth_service.dart';
 import '../services/websocket_service.dart';
 import '../utils/preferences.dart';
 
-/// Main (and only) screen of TwiCC Notify.
+/// Settings tab content.
 ///
-/// Provides settings for URL configuration, connection management,
+/// Provides URL configuration, connection management,
 /// notification preferences, and poll interval control.
 class SettingsScreen extends StatefulWidget {
   final AppPreferences prefs;
@@ -94,14 +94,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('TwiCC Notify'),
-        centerTitle: true,
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
           // --- URL Configuration ---
           _buildSectionHeader('Server'),
           TextField(
@@ -199,8 +194,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onChanged: (value) => setState(() => _prefs.autoConnect = value),
             secondary: const Icon(Icons.power_settings_new),
           ),
-        ],
-      ),
+      ],
     );
   }
 

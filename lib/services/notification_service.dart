@@ -31,6 +31,12 @@ class NotificationService {
   /// Cleared when a session no longer needs attention.
   final Set<String> _notifiedSessions = {};
 
+  /// The deep-link URL from the most recent notification.
+  String? _lastNotifiedUrl;
+
+  /// Returns the last notified deep-link URL, or the TwiCC home URL.
+  String get lastUrlOrHome => _lastNotifiedUrl ?? _prefs.url;
+
   NotificationService(this._prefs) {
     _audioAlerts = AudioAlertService(_prefs);
   }
@@ -122,6 +128,7 @@ class NotificationService {
     final projectName = info.projectName ?? 'Unknown project';
     final sessionTitle = info.sessionTitle ?? 'Untitled session';
     final deepLink = info.deepLinkUrl(_prefs.url);
+    _lastNotifiedUrl = deepLink;
 
     final title = isQuestion ? 'Claude has a question' : 'Claude finished its turn';
 

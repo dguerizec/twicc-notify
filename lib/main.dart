@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
-import 'screens/settings_screen.dart';
+import 'screens/home_screen.dart';
 import 'services/auth_service.dart';
 import 'services/background_service.dart';
 import 'services/notification_service.dart';
+import 'services/stats_service.dart';
 import 'services/websocket_service.dart';
 import 'utils/preferences.dart';
 
@@ -22,7 +23,10 @@ void main() async {
   final notificationService = NotificationService(prefs);
   await notificationService.init();
 
-  final wsService = WebSocketService(prefs, authService, notificationService);
+  final statsService = StatsService(prefs);
+  await statsService.init();
+
+  final wsService = WebSocketService(prefs, authService, notificationService, statsService);
 
   // Auto-connect if configured
   if (prefs.autoConnect && prefs.isConfigured) {
@@ -33,6 +37,8 @@ void main() async {
     prefs: prefs,
     wsService: wsService,
     authService: authService,
+    statsService: statsService,
+    notificationService: notificationService,
   ));
 }
 
@@ -41,12 +47,16 @@ class TwiccNotifyApp extends StatelessWidget {
   final AppPreferences prefs;
   final WebSocketService wsService;
   final AuthService authService;
+  final StatsService statsService;
+  final NotificationService notificationService;
 
   const TwiccNotifyApp({
     super.key,
     required this.prefs,
     required this.wsService,
     required this.authService,
+    required this.statsService,
+    required this.notificationService,
   });
 
   @override
@@ -65,10 +75,12 @@ class TwiccNotifyApp extends StatelessWidget {
         brightness: Brightness.dark,
       ),
       themeMode: ThemeMode.system,
-      home: SettingsScreen(
+      home: HomeScreen(
         prefs: prefs,
         wsService: wsService,
         authService: authService,
+        statsService: statsService,
+        notificationService: notificationService,
       ),
     );
   }

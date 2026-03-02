@@ -10,6 +10,7 @@ import '../utils/preferences.dart';
 import 'auth_service.dart';
 import 'background_service.dart';
 import 'notification_service.dart';
+import 'stats_service.dart';
 
 /// Connection state for the UI.
 enum WsConnectionState {
@@ -31,6 +32,7 @@ class WebSocketService extends ChangeNotifier {
   final AppPreferences _prefs;
   final AuthService _auth;
   final NotificationService _notifications;
+  final StatsService _stats;
 
   IOWebSocketChannel? _channel;
   StreamSubscription? _subscription;
@@ -52,7 +54,7 @@ class WebSocketService extends ChangeNotifier {
   /// Ping interval to keep the connection alive through proxies (Cloudflare, nginx).
   static const int _pingIntervalSeconds = 30;
 
-  WebSocketService(this._prefs, this._auth, this._notifications);
+  WebSocketService(this._prefs, this._auth, this._notifications, this._stats);
 
   WsConnectionState get state => _state;
   String? get errorMessage => _errorMessage;
@@ -155,6 +157,8 @@ class WebSocketService extends ChangeNotifier {
   /// Handle an incoming WebSocket message.
   void _onMessage(dynamic data) {
     if (data is! String) return;
+
+    _stats.recordReceived(utf8.encode(data).length);
 
     try {
       final json = jsonDecode(data) as Map<String, dynamic>;
@@ -304,7 +308,9 @@ class WebSocketService extends ChangeNotifier {
   void _sendPing() {
     if (_channel != null && _state == WsConnectionState.connected) {
       try {
-        _channel!.sink.add(jsonEncode({'type': 'ping'}));
+        final payload = jsonEncode({'type': 'ping'});
+        _channel!.sink.add(payload);
+        _stats.recordSent(utf8.encode(payload).length);
       } catch (e) {
         debugPrint('[TwiCC] Failed to send ping: $e');
       }
