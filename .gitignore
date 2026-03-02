@@ -21,3 +21,6 @@ build/
 *.lock
 .DS_Store
 pubspec.lock
+
+# WiFi device config (local to each developer)
+.wifi-device
