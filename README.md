@@ -20,20 +20,10 @@ Cross-platform (Android, macOS) background notification service for [TwiCC](http
 
 ### 1. Initialize Flutter project
 
-Since the `android/` and `macos/` platform directories need to be generated for your specific Flutter SDK version:
+Generate platform directories (`android/`, `macos/`) for your Flutter SDK version. Existing `lib/` files are not overwritten.
 
 ```bash
-cd twicc-notify
-
-# Create the full Flutter project structure around existing code
-flutter create --project-name twicc_notify --org net.guerizec .
-
-# This will NOT overwrite existing lib/ files, but will generate:
-# - android/ (full platform directory)
-# - macos/ (full platform directory)
-# - test/
-# - analysis_options.yaml
-# - etc.
+./scripts/init.sh
 ```
 
 ### 2. Apply platform configurations
@@ -42,20 +32,18 @@ flutter create --project-name twicc_notify --org net.guerizec .
 
 **macOS** — ensure the entitlements in `macos/Runner.entitlements` (reference template) are present in the generated `macos/Runner/Release.entitlements` and `macos/Runner/DebugProfile.entitlements`.
 
-### 3. Install dependencies
+### 3. Build & deploy
 
 ```bash
-flutter pub get
-```
+# Build + install on connected Android device (preserves app data)
+./scripts/deploy.sh
 
-### 4. Run
+# Or step by step:
+./scripts/build.sh      # Build release APK
+./scripts/install.sh    # Install on device (preserves settings)
 
-```bash
-# Android
-flutter run -d android
-
-# macOS
-flutter run -d macos
+# Fresh install (wipes app data):
+./scripts/clean-install.sh
 ```
 
 ## Configuration
