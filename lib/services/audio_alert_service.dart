@@ -1,5 +1,6 @@
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
+import 'package:headphones_detection/headphones_detection.dart';
 
 import '../utils/preferences.dart';
 
@@ -56,7 +57,12 @@ class AudioAlertService {
         if (!_prefs.audioAlertOnWaiting) return;
     }
 
+    // Only play through media stream if headphones (BT or wired) are connected.
+    // Avoids unexpected sound from the phone speaker.
     try {
+      final headphonesConnected = await HeadphonesDetection.isHeadphonesConnected();
+      if (!headphonesConnected) return;
+
       await _player.stop(); // Stop any currently playing sound
       await _player.play(AssetSource(alert.assetPath));
     } catch (e) {
