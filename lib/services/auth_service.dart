@@ -8,6 +8,16 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../utils/preferences.dart';
 
+/// Thrown when the server presents a self-signed or untrusted TLS certificate
+/// and the user has not opted in to accepting it.
+class SelfSignedCertificateException implements Exception {
+  final String host;
+  SelfSignedCertificateException(this.host);
+
+  @override
+  String toString() => 'Self-signed certificate rejected for $host';
+}
+
 /// Authentication mode detected from the TwiCC server.
 enum AuthMode {
   /// No authentication required (no password, no Cloudflare).
@@ -72,6 +82,28 @@ class AuthService {
     clearSession();
   }
 
+  // --- HTTP client factory ---
+
+  /// Create an [HttpClient] with proper TLS certificate handling.
+  ///
+  /// Self-signed certificates are only accepted if the user has explicitly
+  /// enabled it in settings. Otherwise, a [SelfSignedCertificateException]
+  /// is thrown when a bad certificate is encountered, allowing the UI to
+  /// prompt the user for confirmation.
+  HttpClient _createHttpClient() {
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 10);
+    client.badCertificateCallback = (cert, host, port) {
+      if (_prefs.acceptSelfSignedCerts) {
+        debugPrint('[TwiCC Auth] Accepting self-signed cert for $host:$port');
+        return true;
+      }
+      debugPrint('[TwiCC Auth] Rejecting self-signed cert for $host:$port');
+      return false;
+    };
+    return client;
+  }
+
   // --- Auth mode detection ---
 
   /// Detect the authentication mode by probing the server.
@@ -84,16 +116,16 @@ class AuthService {
   ///
   /// If a CF JWT is stored, it's included in the probe request so
   /// the check can pass through Cloudflare Access.
+  ///
+  /// Throws [SelfSignedCertificateException] if the server uses
+  /// a self-signed certificate and the user hasn't accepted it.
   Future<AuthMode> detectAuthMode() async {
     final url = _prefs.url;
     if (url.isEmpty) return AuthMode.none;
 
-    try {
-      final client = HttpClient();
-      // Accept self-signed certificates (common for local/tunnel setups)
-      client.badCertificateCallback = (cert, host, port) => true;
-      client.connectionTimeout = const Duration(seconds: 10);
+    final client = _createHttpClient();
 
+    try {
       final base = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
       final request = await client.getUrl(Uri.parse('$base/api/auth/check/'));
       request.followRedirects = false;
@@ -145,10 +177,16 @@ class AuthService {
         debugPrint('[TwiCC Auth] Non-JSON response → Cloudflare mode');
         return AuthMode.cloudflare;
       }
+    } on HandshakeException catch (_) {
+      // TLS handshake failed — likely a self-signed certificate
+      final host = Uri.parse(url).host;
+      throw SelfSignedCertificateException(host);
     } catch (e) {
       // Network error — can't detect, let WebSocket try without auth
       debugPrint('[TwiCC Auth] Detection failed: $e');
       return AuthMode.none;
+    } finally {
+      client.close();
     }
   }
 
@@ -161,15 +199,16 @@ class AuthService {
   ///
   /// Returns [AuthResult.ok] on success, [AuthResult.failed] with an
   /// error message on failure.
+  ///
+  /// Throws [SelfSignedCertificateException] if the server uses
+  /// a self-signed certificate and the user hasn't accepted it.
   Future<AuthResult> loginWithPassword(String password) async {
     final url = _prefs.url;
     if (url.isEmpty) return const AuthResult.failed('No URL configured');
 
-    try {
-      final client = HttpClient();
-      client.badCertificateCallback = (cert, host, port) => true;
-      client.connectionTimeout = const Duration(seconds: 10);
+    final client = _createHttpClient();
 
+    try {
       final base = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
       final request =
           await client.postUrl(Uri.parse('$base/api/auth/login/'));
@@ -184,7 +223,6 @@ class AuthService {
       request.write(jsonEncode({'password': password}));
       final response = await request.close();
       final body = await response.transform(utf8.decoder).join();
-      client.close();
 
       if (response.statusCode == 200) {
         // Extract sessionid cookie from Set-Cookie headers
@@ -213,9 +251,14 @@ class AuthService {
       } catch (_) {
         return AuthResult.failed('Login failed (HTTP ${response.statusCode})');
       }
+    } on HandshakeException catch (_) {
+      final host = Uri.parse(url).host;
+      throw SelfSignedCertificateException(host);
     } catch (e) {
       debugPrint('[TwiCC Auth] Login error: $e');
       return AuthResult.failed('Connection error: $e');
+    } finally {
+      client.close();
     }
   }
 
@@ -289,6 +332,57 @@ class AuthService {
     if (parts.isEmpty) return {};
     return {'Cookie': parts.join('; ')};
   }
+}
+
+// ---------------------------------------------------------------------------
+// Self-signed certificate confirmation dialog
+// ---------------------------------------------------------------------------
+
+/// Show a dialog asking the user to accept a self-signed TLS certificate.
+///
+/// Returns true if the user accepts, false otherwise.
+Future<bool> showSelfSignedCertDialog(BuildContext context, String host) async {
+  return await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogContext) {
+      return AlertDialog(
+        icon: const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 40),
+        title: const Text('Untrusted Certificate'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'The server at $host uses a self-signed or untrusted TLS certificate.',
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'This is common for local or development servers, but could '
+              'also indicate a security risk.',
+              style: TextStyle(fontSize: 13, color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Accept self-signed certificates for this app?',
+              style: TextStyle(fontWeight: FontWeight.w500),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Refuse'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.orange),
+            child: const Text('Accept'),
+          ),
+        ],
+      );
+    },
+  ) ?? false;
 }
 
 // ---------------------------------------------------------------------------

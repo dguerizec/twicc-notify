@@ -98,6 +98,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       // All auth resolved, connect
       _ws.start();
+    } on SelfSignedCertificateException catch (e) {
+      if (!mounted) return;
+      final accepted = await showSelfSignedCertDialog(context, e.host);
+      if (accepted) {
+        _prefs.acceptSelfSignedCerts = true;
+        if (mounted) setState(() {});
+        // Retry now that self-signed certs are accepted
+        await _connectWithAuth();
+        return;
+      }
     } finally {
       if (mounted) setState(() => _authenticating = false);
     }
@@ -163,6 +173,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             keyboardType: TextInputType.url,
             autocorrect: false,
             onSubmitted: (_) => _saveUrl(),
+          ),
+          SwitchListTile(
+            title: const Text('Accept self-signed certificates'),
+            subtitle: const Text('Allow untrusted TLS certificates (local/dev servers)'),
+            value: _prefs.acceptSelfSignedCerts,
+            onChanged: (value) => setState(() => _prefs.acceptSelfSignedCerts = value),
+            secondary: const Icon(Icons.security),
           ),
           const SizedBox(height: 16),
 
