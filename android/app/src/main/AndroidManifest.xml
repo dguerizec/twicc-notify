@@ -7,6 +7,7 @@
     <!-- Foreground service for persistent background execution -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
 
     <!-- Notification permissions (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -40,8 +41,13 @@
         <!-- Override flutter_background_service's service declaration to add foregroundServiceType -->
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
-            android:foregroundServiceType="dataSync"
+            android:foregroundServiceType="dataSync|remoteMessaging"
             tools:replace="android:foregroundServiceType" />
+
+        <!-- Keep ic_stat_notification from being stripped by resource shrinker -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_stat_notification" />
 
         <meta-data
             android:name="flutterEmbedding"

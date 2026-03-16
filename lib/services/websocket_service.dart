@@ -10,6 +10,7 @@ import '../utils/preferences.dart';
 import 'auth_service.dart';
 import 'background_service.dart';
 import 'notification_service.dart';
+import 'quota_service.dart';
 import 'stats_service.dart';
 
 /// Connection state for the UI.
@@ -33,6 +34,7 @@ class WebSocketService extends ChangeNotifier {
   final AuthService _auth;
   final NotificationService _notifications;
   final StatsService _stats;
+  final QuotaService _quotas;
 
   IOWebSocketChannel? _channel;
   StreamSubscription? _subscription;
@@ -48,13 +50,21 @@ class WebSocketService extends ChangeNotifier {
   /// Whether the user has requested the service to be active.
   bool _active = false;
 
+  /// Monotonically increasing connection generation counter.
+  ///
+  /// Incremented each time [_connect] creates a new WebSocket connection.
+  /// Used by the [_onDone] closure to detect stale close events from
+  /// previous connections that fire after a new connection has already
+  /// been established — preventing leaked stream listeners.
+  int _connectionGeneration = 0;
+
   /// Maximum reconnect delay in seconds.
   static const int _maxReconnectDelay = 30;
 
   /// Ping interval to keep the connection alive through proxies (Cloudflare, nginx).
   static const int _pingIntervalSeconds = 30;
 
-  WebSocketService(this._prefs, this._auth, this._notifications, this._stats);
+  WebSocketService(this._prefs, this._auth, this._notifications, this._stats, this._quotas);
 
   WsConnectionState get state => _state;
   String? get errorMessage => _errorMessage;
@@ -101,7 +111,21 @@ class WebSocketService extends ChangeNotifier {
 
     // Request only the message types we need. If the server doesn't
     // support this parameter it simply ignores it (backward compatible).
-    final wsUrl = '${baseWsUrl}?subscribe=process_state,active_processes';
+    final wsUrl = '${baseWsUrl}?subscribe=process_state,active_processes,usage_updated';
+
+    // Clean up any stale resources from a previous connection before
+    // creating a new one. This prevents leaked stream listeners when
+    // _onDone() from a previous connection fires late and overwrites
+    // our fields, leaving orphaned subscriptions.
+    _stopPingTimer();
+    _subscription?.cancel();
+    _subscription = null;
+    _channel?.sink.close();
+    _channel = null;
+
+    // Bump generation so any late-firing _onDone from a previous
+    // connection will be ignored.
+    final generation = ++_connectionGeneration;
 
     _setState(WsConnectionState.connecting);
     _errorMessage = null;
@@ -122,17 +146,25 @@ class WebSocketService extends ChangeNotifier {
         return;
       }
 
+      // If another _connect() was called while we were awaiting (should not
+      // happen due to state guard, but be defensive), discard this channel.
+      if (generation != _connectionGeneration) {
+        debugPrint('[TwiCC] Discarding stale connection (gen $generation, current $_connectionGeneration)');
+        channel.sink.close();
+        return;
+      }
+
       _channel = channel;
       _subscription = _channel!.stream.listen(
         _onMessage,
         onError: _onError,
-        onDone: _onDone,
+        onDone: () => _onDone(generation),
       );
 
       _setState(WsConnectionState.connected);
       _reconnectAttempts = 0;
       _startPingTimer();
-      debugPrint('[TwiCC] WebSocket connected to $wsUrl');
+      debugPrint('[TwiCC] WebSocket connected (gen $generation) to $wsUrl');
       updateForegroundNotification('TwiCC Notify', 'Connected — monitoring Claude sessions');
     } catch (e) {
       _channel = null;
@@ -164,6 +196,12 @@ class WebSocketService extends ChangeNotifier {
       final json = jsonDecode(data) as Map<String, dynamic>;
       final type = json['type'] as String?;
 
+      if (type == 'process_state' || type == 'active_processes') {
+        final sid = json['session_id'] as String?;
+        final state = json['state'] as String?;
+        debugPrint('[TwiCC] WS <<< $type${sid != null ? ' session=${sid.substring(0, 12)}… state=$state' : ''}');
+      }
+
       switch (type) {
         case 'active_processes':
           _handleActiveProcesses(json);
@@ -173,6 +211,9 @@ class WebSocketService extends ChangeNotifier {
           break;
         case 'pong':
           break; // Expected response to our ping heartbeat
+        case 'usage_updated':
+          _quotas.handleUsageUpdated(json);
+          break;
         case 'auth_failure':
           _handleAuthFailure();
           break;
@@ -220,13 +261,30 @@ class WebSocketService extends ChangeNotifier {
     _setState(WsConnectionState.error);
   }
 
-  /// Called when the WebSocket connection closes.
-  void _onDone() {
+  /// Called when a WebSocket connection closes.
+  ///
+  /// The [generation] parameter identifies which connection closed.
+  /// If a newer connection has already been established (generation mismatch),
+  /// this close event is stale and must be ignored to prevent overwriting
+  /// the new connection's state and leaking stream listeners.
+  void _onDone(int generation) {
+    // Ignore stale close events from previous connections.
+    // This prevents the race condition where a late-firing _onDone
+    // overwrites _channel/_subscription of a newer, active connection,
+    // leaking the newer subscription and causing duplicate message delivery.
+    if (generation != _connectionGeneration) {
+      debugPrint('[TwiCC] Ignoring stale WebSocket close (gen $generation, current $_connectionGeneration)');
+      return;
+    }
+
     final closeCode = _channel?.closeCode;
     final closeReason = _channel?.closeReason;
-    debugPrint('[TwiCC] WebSocket closed: code=$closeCode reason=$closeReason');
-    _channel = null;
+    debugPrint('[TwiCC] WebSocket closed (gen $generation): code=$closeCode reason=$closeReason');
+
+    _stopPingTimer();
+    _subscription?.cancel();
     _subscription = null;
+    _channel = null;
 
     if (!_intentionalDisconnect && _active) {
       // Check if it was an auth failure (close code 4001)

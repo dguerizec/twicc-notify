@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -43,7 +42,7 @@ class NotificationService {
 
   /// Initialize the notification plugin with platform-specific settings.
   Future<void> init() async {
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings('@mipmap/ic_stat_notification');
     const darwinSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -92,8 +91,6 @@ class NotificationService {
     if (info.needsAttention) {
       if (_notifiedSessions.add(info.sessionId)) {
         final isQuestion = info.pendingRequest != null;
-        debugPrint('[TwiCC] Notifying (${isQuestion ? 'question' : 'waiting'}): '
-            'session=${info.sessionId.substring(0, 12)}…');
         await _showNotification(info, isQuestion: isQuestion);
         await _audioAlerts.play(isQuestion ? AlertSound.question : AlertSound.waiting);
       }
@@ -109,8 +106,6 @@ class NotificationService {
     for (final process in processes) {
       if (process.needsAttention && _notifiedSessions.add(process.sessionId)) {
         final isQuestion = process.pendingRequest != null;
-        debugPrint('[TwiCC] Notifying (${isQuestion ? 'question' : 'waiting'}): '
-            'session=${process.sessionId.substring(0, 12)}…');
         await _showNotification(process, isQuestion: isQuestion);
         await _audioAlerts.play(isQuestion ? AlertSound.question : AlertSound.waiting);
       }

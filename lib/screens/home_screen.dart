@@ -3,9 +3,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../services/auth_service.dart';
 import '../services/notification_service.dart';
+import '../services/quota_service.dart';
 import '../services/stats_service.dart';
 import '../services/websocket_service.dart';
 import '../utils/preferences.dart';
+import 'quotas_screen.dart';
 import 'settings_screen.dart';
 import 'stats_screen.dart';
 
@@ -15,6 +17,7 @@ class HomeScreen extends StatefulWidget {
   final WebSocketService wsService;
   final AuthService authService;
   final StatsService statsService;
+  final QuotaService quotaService;
   final NotificationService notificationService;
 
   const HomeScreen({
@@ -23,6 +26,7 @@ class HomeScreen extends StatefulWidget {
     required this.wsService,
     required this.authService,
     required this.statsService,
+    required this.quotaService,
     required this.notificationService,
   });
 
@@ -31,9 +35,16 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  int _selectedIndex = 0;
+  late int _selectedIndex;
 
-  static const _titles = ['TwiCC Notify', 'Stats'];
+  @override
+  void initState() {
+    super.initState();
+    // Show Settings tab first when not yet configured, Quotas otherwise.
+    _selectedIndex = widget.prefs.isConfigured ? 0 : 1;
+  }
+
+  static const _titles = ['Quotas', 'TwiCC Notify', 'Stats'];
 
   /// Open TwiCC in an in-app browser tab.
   ///
@@ -65,6 +76,9 @@ class _HomeScreenState extends State<HomeScreen> {
       body: IndexedStack(
         index: _selectedIndex,
         children: [
+          QuotasScreen(
+            quotaService: widget.quotaService,
+          ),
           SettingsScreen(
             prefs: widget.prefs,
             wsService: widget.wsService,
@@ -80,6 +94,11 @@ class _HomeScreenState extends State<HomeScreen> {
         selectedIndex: _selectedIndex,
         onDestinationSelected: (index) => setState(() => _selectedIndex = index),
         destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.speed_outlined),
+            selectedIcon: Icon(Icons.speed),
+            label: 'Quotas',
+          ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),
             selectedIcon: Icon(Icons.settings),

@@ -6,7 +6,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 /// Notification channel ID for the persistent foreground service notification.
-const _foregroundChannelId = 'twicc_foreground_service';
+const _foregroundChannelId = 'twicc_foreground_service_v2';
 const _foregroundChannelName = 'Background Monitoring';
 
 /// Initialize the foreground service configuration.
@@ -28,7 +28,7 @@ Future<void> initializeBackgroundService() async {
           _foregroundChannelId,
           _foregroundChannelName,
           description: 'Keeps TwiCC Notify monitoring Claude sessions in background',
-          importance: Importance.defaultImportance,
+          importance: Importance.low,
         ),
       );
     }
@@ -45,7 +45,7 @@ Future<void> initializeBackgroundService() async {
       notificationChannelId: _foregroundChannelId,
       initialNotificationTitle: 'TwiCC Notify',
       initialNotificationContent: 'Monitoring Claude sessions',
-      foregroundServiceTypes: [AndroidForegroundType.dataSync],
+      foregroundServiceTypes: [AndroidForegroundType.remoteMessaging],
     ),
     iosConfiguration: IosConfiguration(
       autoStart: false,
